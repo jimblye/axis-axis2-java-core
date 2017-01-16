@@ -1323,6 +1323,12 @@
                             <name>java.io.tmpdir</name>
                             <value>${project.build.directory}/tmp</value>
                         </property>
+                        <!-- Avoids SecurityException triggered by code that attempts to read config
+                             files from the user's home directory. -->
+                        <property>
+                            <name>user.home</name>
+                            <value>${project.build.directory}</value>
+                        </property>
                     </systemProperties>
                     <argLine>${securityManagerArgs}</argLine>
                 </configuration>
