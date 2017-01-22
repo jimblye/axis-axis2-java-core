@@ -42,7 +42,7 @@ public class AxisRequestEntityImpl implements HttpEntity {
 
     @Override
     public Header getContentType() {
-        return new BasicHeader(HTTPConstants.HEADER_CONTENT_TYPE, entity.getContentTypeAsString());
+        return new BasicHeader(HTTPConstants.HEADER_CONTENT_TYPE, entity.getContentType());
     }
 
     @Override
@@ -52,7 +52,9 @@ public class AxisRequestEntityImpl implements HttpEntity {
 
     @Override
     public InputStream getContent() throws IOException {
-        return entity.getRequestEntityContent();
+        // Implementations are allowed to throw UnsupportedOperationException and this method is
+        // never called for outgoing requests anyway.
+        throw new UnsupportedOperationException();
     }
 
     @Override
@@ -67,7 +69,7 @@ public class AxisRequestEntityImpl implements HttpEntity {
 
     @Override
     public void consumeContent() {
-        // TODO: Handle this correctly
+        // We don't need to do anything here.
     }
 
     @Override

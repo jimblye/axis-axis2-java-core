@@ -26,10 +26,9 @@ import org.apache.axis2.context.MessageContext;
 import org.apache.axis2.context.OperationContext;
 import org.apache.axis2.i18n.Messages;
 import org.apache.axis2.transport.http.AxisRequestEntity;
-import org.apache.axis2.transport.http.HTTPAuthenticator;
+import org.apache.axis2.transport.http.CommonsTransportHeaders;
 import org.apache.axis2.transport.http.HTTPConstants;
 import org.apache.axis2.transport.http.HTTPSender;
-import org.apache.axis2.transport.http.HTTPTransportConstants;
 import org.apache.axis2.transport.http.Request;
 import org.apache.axis2.wsdl.WSDLConstants;
 import org.apache.commons.logging.Log;
@@ -37,18 +36,8 @@ import org.apache.commons.logging.LogFactory;
 import org.apache.http.Header;
 import org.apache.http.HeaderElement;
 import org.apache.http.HttpEntity;
-import org.apache.http.HttpHost;
 import org.apache.http.HttpResponse;
 import org.apache.http.NameValuePair;
-import org.apache.http.auth.AuthScope;
-import org.apache.http.auth.Credentials;
-import org.apache.http.auth.NTCredentials;
-import org.apache.http.auth.UsernamePasswordCredentials;
-import org.apache.http.auth.params.AuthPNames;
-import org.apache.http.client.methods.HttpDelete;
-import org.apache.http.client.methods.HttpGet;
-import org.apache.http.client.methods.HttpPost;
-import org.apache.http.client.methods.HttpPut;
 import org.apache.http.client.methods.HttpRequestBase;
 import org.apache.http.client.params.AuthPolicy;
 import org.apache.http.client.params.ClientPNames;
@@ -57,7 +46,6 @@ import org.apache.http.conn.scheme.PlainSocketFactory;
 import org.apache.http.conn.scheme.Scheme;
 import org.apache.http.conn.scheme.SchemeRegistry;
 import org.apache.http.conn.ssl.SSLSocketFactory;
-import org.apache.http.impl.auth.NTLMSchemeFactory;
 import org.apache.http.impl.client.AbstractHttpClient;
 import org.apache.http.impl.client.DefaultHttpClient;
 import org.apache.http.impl.conn.PoolingClientConnectionManager;
@@ -69,11 +57,8 @@ import org.apache.http.params.HttpParams;
 
 import java.io.IOException;
 import java.io.InputStream;
-import java.net.URISyntaxException;
 import java.net.URL;
-import java.util.ArrayList;
 import java.util.HashMap;
-import java.util.List;
 import java.util.Map;
 import java.util.zip.GZIPInputStream;
 
@@ -89,58 +74,10 @@ public class HTTPSenderImpl extends HTTPSender {
         return httpVersion;
     }
 
-    /**
-     * Used to send a request via HTTP Get method
-     *
-     * @param msgContext        - The MessageContext of the message
-     * @param url               - The target URL
-     * @param soapActionString - The soapAction string of the request
-     * @throws org.apache.axis2.AxisFault - Thrown in case an exception occurs
-     */
     @Override
-    protected Request prepareGet(final MessageContext msgContext, final URL url)
-            throws AxisFault {
-        return new RequestImpl(this, msgContext, url, null, new HttpGet());
-    }
-
-    /**
-     * Used to send a request via HTTP Delete Method
-     *
-     * @param msgContext        - The MessageContext of the message
-     * @param url               - The target URL
-     * @param soapActionString - The soapAction string of the request
-     * @throws org.apache.axis2.AxisFault - Thrown in case an exception occurs
-     */
-    @Override
-    protected Request prepareDelete(final MessageContext msgContext, final URL url)
-            throws AxisFault {
-        return new RequestImpl(this, msgContext, url, null, new HttpDelete());
-    }
-
-    /**
-     * Used to send a request via HTTP Post Method
-     *
-     * @param msgContext       - The MessageContext of the message
-     * @param url              - The target URL
-     * @throws org.apache.axis2.AxisFault - Thrown in case an exception occurs
-     */
-    @Override
-    protected Request preparePost(final MessageContext msgContext, final URL url, AxisRequestEntity requestEntity)
-            throws AxisFault {
-        return new RequestImpl(this, msgContext, url, requestEntity, new HttpPost());
-    }
-
-    /**
-     * Used to send a request via HTTP Put Method
-     *
-     * @param msgContext       - The MessageContext of the message
-     * @param url              - The target URL
-     * @throws org.apache.axis2.AxisFault - Thrown in case an exception occurs
-     */
-    @Override
-    protected Request preparePut(final MessageContext msgContext, final URL url, AxisRequestEntity requestEntity)
-            throws AxisFault {
-        return new RequestImpl(this, msgContext, url, requestEntity, new HttpPut());
+    protected Request createRequest(MessageContext msgContext, String methodName, URL url,
+            AxisRequestEntity requestEntity) throws AxisFault {
+        return new RequestImpl(this, msgContext, methodName, url, requestEntity);
     }
 
     /**
@@ -151,22 +88,16 @@ public class HTTPSenderImpl extends HTTPSender {
      *                   NOT!
      * @throws AxisFault if problems occur
      */
-    protected void obtainHTTPHeaderInformation(Object httpResponse, MessageContext msgContext)
+    protected void obtainHTTPHeaderInformation(Request request, HttpResponse response, MessageContext msgContext)
             throws AxisFault {
-        HttpResponse response;
-        if (httpResponse instanceof HttpResponse) {
-            response = (HttpResponse) httpResponse;
-        } else {
-            return;
-        }
         // Set RESPONSE properties onto the REQUEST message context. They will
         // need to be copied off the request context onto
         // the response context elsewhere, for example in the
         // OutInOperationClient.
-        Map transportHeaders = new HTTPTransportHeaders(response.getAllHeaders());
+        Map transportHeaders = new CommonsTransportHeaders(request.getResponseHeaders());
         msgContext.setProperty(MessageContext.TRANSPORT_HEADERS, transportHeaders);
         msgContext.setProperty(HTTPConstants.MC_HTTP_STATUS_CODE,
-                               new Integer(response.getStatusLine().getStatusCode()));
+                               new Integer(request.getStatusCode()));
         Header header = response.getFirstHeader(HTTPConstants.HEADER_CONTENT_TYPE);
 
         if (header != null) {
@@ -250,191 +181,6 @@ public class HTTPSenderImpl extends HTTPSender {
             cookie = cookie + "; " + parameter.getName() + "=" + parameter.getValue();
         }
         return cookie;
-    }
-
-    protected void processResponse(HttpResponse response, MessageContext msgContext)
-            throws IOException {
-        obtainHTTPHeaderInformation(response, msgContext);
-
-        HttpEntity httpEntity = response.getEntity();
-        InputStream in = httpEntity.getContent();
-        if (in == null) {
-            throw new AxisFault(Messages.getMessage("canNotBeNull", "InputStream"));
-        }
-        Header contentEncoding = httpEntity.getContentEncoding();
-        if (contentEncoding != null) {
-            if (contentEncoding.getValue().equalsIgnoreCase(HTTPConstants.COMPRESSION_GZIP)) {
-                in = new GZIPInputStream(in);
-                // If the content-encoding is identity we can basically ignore
-                // it.
-            } else if (!"identity".equalsIgnoreCase(contentEncoding.getValue())) {
-                throw new AxisFault("HTTP :" + "unsupported content-encoding of '"
-                                    + contentEncoding.getValue() + "' found");
-            }
-        }
-
-        OperationContext opContext = msgContext.getOperationContext();
-        if (opContext != null) {
-            opContext.setProperty(MessageContext.TRANSPORT_IN, in);
-        }
-    }
-
-    /**
-     * getting host configuration to support standard http/s, proxy and NTLM
-     * support
-     *
-     * @param client    active HttpClient
-     * @param msgCtx    active MessageContext
-     * @param targetURL the target URL
-     * @return a HostConfiguration set up with proxy information
-     * @throws org.apache.axis2.AxisFault if problems occur
-     */
-    protected HttpHost getHostConfiguration(AbstractHttpClient client, MessageContext msgCtx,
-                                            URL targetURL) throws AxisFault {
-
-        boolean isAuthenticationEnabled = isAuthenticationEnabled(msgCtx);
-        int port = targetURL.getPort();
-
-        String protocol = targetURL.getProtocol();
-        if (port == -1) {
-            if (HTTPTransportConstants.PROTOCOL_HTTP.equals(protocol)) {
-                port = 80;
-            } else if (HTTPTransportConstants.PROTOCOL_HTTPS.equals(protocol)) {
-                port = 443;
-            }
-        }
-        // to see the host is a proxy and in the proxy list - available in
-        // axis2.xml
-        HttpHost hostConfig = new HttpHost(targetURL.getHost(), port, targetURL.getProtocol());
-
-        // TODO : one might need to set his own socket factory. We have to allow that case as well.
-
-        if (isAuthenticationEnabled) {
-            // Basic, Digest, NTLM and custom authentications.
-            this.setAuthenticationInfo(client, msgCtx);
-        }
-        // proxy configuration
-
-        if (HTTPProxyConfigurator.isProxyEnabled(msgCtx, targetURL)) {
-            if (log.isDebugEnabled()) {
-                log.debug("Configuring HTTP proxy.");
-            }
-            HTTPProxyConfigurator.configure(msgCtx, client);
-        }
-
-        return hostConfig;
-    }
-
-    protected boolean isAuthenticationEnabled(MessageContext msgCtx) {
-        return (msgCtx.getProperty(HTTPConstants.AUTHENTICATE) != null);
-    }
-
-    /*
-     * This will handle server Authentication, It could be either NTLM, Digest
-     * or Basic Authentication. Apart from that user can change the priory or
-     * add a custom authentication scheme.
-     */
-    protected void setAuthenticationInfo(AbstractHttpClient agent, MessageContext msgCtx)
-            throws AxisFault {
-        HTTPAuthenticator authenticator;
-        Object obj = msgCtx.getProperty(HTTPConstants.AUTHENTICATE);
-        if (obj != null) {
-            if (obj instanceof HTTPAuthenticator) {
-                authenticator = (HTTPAuthenticator) obj;
-
-                String username = authenticator.getUsername();
-                String password = authenticator.getPassword();
-                String host = authenticator.getHost();
-                String domain = authenticator.getDomain();
-
-                int port = authenticator.getPort();
-                String realm = authenticator.getRealm();
-
-                /* If retrying is available set it first */
-                isAllowedRetry = authenticator.isAllowedRetry();
-
-                Credentials creds;
-
-                // TODO : Set preemptive authentication, but its not recommended in HC 4
-
-                if (host != null) {
-                    if (domain != null) {
-                        /* Credentials for NTLM Authentication */
-                        agent.getAuthSchemes().register("ntlm",new NTLMSchemeFactory());
-                        creds = new NTCredentials(username, password, host, domain);
-                    } else {
-                        /* Credentials for Digest and Basic Authentication */
-                        creds = new UsernamePasswordCredentials(username, password);
-                    }
-                    agent.getCredentialsProvider().
-                            setCredentials(new AuthScope(host, port, realm), creds);
-                } else {
-                    if (domain != null) {
-                        /*
-                         * Credentials for NTLM Authentication when host is
-                         * ANY_HOST
-                         */
-                        agent.getAuthSchemes().register("ntlm",new NTLMSchemeFactory());
-                        creds = new NTCredentials(username, password, AuthScope.ANY_HOST, domain);
-                        agent.getCredentialsProvider().
-                                setCredentials(new AuthScope(AuthScope.ANY_HOST, port, realm),
-                                               creds);
-                    } else {
-                        /* Credentials only for Digest and Basic Authentication */
-                        creds = new UsernamePasswordCredentials(username, password);
-                        agent.getCredentialsProvider().
-                                setCredentials(new AuthScope(AuthScope.ANY), creds);
-                    }
-                }
-                /* Customizing the priority Order */
-                List schemes = authenticator.getAuthSchemes();
-                if (schemes != null && schemes.size() > 0) {
-                    List authPrefs = new ArrayList(3);
-                    for (int i = 0; i < schemes.size(); i++) {
-                        if (schemes.get(i) instanceof AuthPolicy) {
-                            authPrefs.add(schemes.get(i));
-                            continue;
-                        }
-                        String scheme = (String) schemes.get(i);
-                        authPrefs.add(authenticator.getAuthPolicyPref(scheme));
-
-                    }
-                    agent.getParams().setParameter(AuthPNames.TARGET_AUTH_PREF, authPrefs);
-                }
-
-            } else {
-                throw new AxisFault("HttpTransportProperties.Authenticator class cast exception");
-            }
-        }
-
-    }
-
-    /**
-     * Method used to copy all the common properties
-     *
-     * @param msgContext       - The messageContext of the request message
-     * @param url              - The target URL
-     * @param httpMethod       - The http method used to send the request
-     * @param httpClient       - The httpclient used to send the request
-     * @param soapActionString - The soap action atring of the request message
-     * @return MessageFormatter - The messageFormatter for the relavent request
-     *         message
-     * @throws org.apache.axis2.AxisFault - Thrown in case an exception occurs
-     */
-    protected void populateCommonProperties(MessageContext msgContext, URL url,
-                                                        HttpRequestBase httpMethod,
-                                                        AbstractHttpClient httpClient)
-            throws AxisFault {
-
-        if (isAuthenticationEnabled(msgContext)) {
-            httpMethod.getParams().setBooleanParameter(ClientPNames.HANDLE_AUTHENTICATION, true);
-        }
-
-        try {
-            httpMethod.setURI(url.toURI());
-        } catch (URISyntaxException e) {
-            log.error("Error in URI : " + url, e);
-        }
     }
 
     /**
